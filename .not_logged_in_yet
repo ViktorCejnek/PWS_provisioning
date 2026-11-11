@@ -1,0 +1,57 @@
+# ==============================================================================
+#  /root/.not_logged_in_yet
+#  Armbian Official Automatic First-Boot Configuration
+#  Documentation: https://docs.armbian.com/user-guide/autoconfig/
+#
+#  Place this file at /root/.not_logged_in_yet on the root filesystem (ext4)
+#  of your Armbian image or flashed MicroSD card before the first boot.
+# ==============================================================================
+
+# ── 1. Remote Configuration (Optional) ────────────────────────────────────────
+# If you want Armbian to fetch all settings dynamically from a remote URL
+# (e.g., your GitHub raw URL or local web server), uncomment the line below.
+# When PRESET_CONFIGURATION is set, it will download and source that remote file.
+#
+# PRESET_CONFIGURATION="http://your-server-ip-or-domain/path/to/not_logged_in_yet.conf"
+
+# ── 2. Root Account ───────────────────────────────────────────────────────────
+# Defining PRESET_ROOT_PASSWORD or PRESET_USER_NAME triggers unattended mode
+# in Armbian's first login wizard.
+PRESET_ROOT_PASSWORD="orangepi1234"
+
+# Optional: Add SSH public key for root login
+# PRESET_ROOT_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... root@host"
+
+# ── 3. Primary User Account (pi) ──────────────────────────────────────────────
+# PWS 400K Klipper stack is configured to run under user 'pi'
+PRESET_USER_NAME="pi"
+PRESET_USER_PASSWORD="orangepi1234"
+PRESET_DEFAULT_REALNAME="PrintWithSmile"
+PRESET_USER_SHELL="/bin/bash"
+
+# Optional: Add SSH public key for the pi user
+# PRESET_USER_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@host"
+
+# ── 4. System Localization & Timezone ─────────────────────────────────────────
+SET_LANG_BASED_ON_LOCATION="n"
+PRESET_LOCALE="en_US.UTF-8"
+PRESET_TIMEZONE="Europe/Prague"
+
+# ── 5. Network Configuration ──────────────────────────────────────────────────
+# Armbian writes network configurations to /etc/netplan/
+PRESET_NET_CHANGE_DEFAULTS="1"
+PRESET_NET_ETHERNET_ENABLED="1"
+
+# Wi-Fi Configuration (Set PRESET_NET_WIFI_ENABLED="1" if using Wi-Fi)
+PRESET_NET_WIFI_ENABLED="0"
+PRESET_NET_WIFI_SSID="YOUR_WIFI_SSID"
+PRESET_NET_WIFI_KEY="YOUR_WIFI_PASSWORD"
+PRESET_NET_WIFI_COUNTRYCODE="CZ"
+PRESET_CONNECT_WIRELESS="n"
+
+# Static IP Settings (Leave disabled if using DHCP on your network)
+PRESET_NET_USE_STATIC="0"
+PRESET_NET_STATIC_IP="100.65.3.145"
+PRESET_NET_STATIC_MASK="255.255.255.0"
+PRESET_NET_STATIC_GATEWAY="100.65.3.1"
+PRESET_NET_STATIC_DNS="1.1.1.1 8.8.8.8"
