@@ -122,23 +122,40 @@ step "2/11  Configuring UART3 and GPIO permissions"
 
 ARMBIAN_ENV="/boot/armbianEnv.txt"
 
-# 1. UART3 overlay for MCU communication (/dev/ttyS3)
-UART3_OVERLAY="uart3"
-if ls /boot/dtb/allwinner/overlay/sun50i-h6-uart3* &>/dev/null 2>&1; then
-  UART3_OVERLAY="sun50i-h6-uart3"
-fi
-
+# 1. Enable the UART3 overlay for MCU communication (/dev/ttyS3)
 if [[ -f "$ARMBIAN_ENV" ]]; then
-  if ! grep -qE "(^|\s)${UART3_OVERLAY}(\s|$)" "$ARMBIAN_ENV"; then
-    if grep -q "^overlays=" "$ARMBIAN_ENV"; then
-      sudo sed -i "s/^overlays=\(.*\)/overlays=\1 ${UART3_OVERLAY}/" "$ARMBIAN_ENV"
+  OVERLAY_PREFIX=$(awk -F= '/^overlay_prefix=/ { gsub(/[ "\r]/, "", $2); print $2; exit }' "$ARMBIAN_ENV")
+  SHORT_NAME="uart3"
+  FULL_NAME="${OVERLAY_PREFIX:-sun50i-h6}-${SHORT_NAME}"
+  TARGET_OVERLAY="$FULL_NAME"
+  [[ -n "$OVERLAY_PREFIX" ]] && TARGET_OVERLAY="$SHORT_NAME"
+
+  DTB_DIR="/boot/dtb/allwinner/overlay"
+  [[ -d "$DTB_DIR" ]] || DTB_DIR="/boot/dtb/overlay"
+
+  if [[ -f "${DTB_DIR}/${FULL_NAME}.dtbo" || -f "${DTB_DIR}/${SHORT_NAME}.dtbo" ]]; then
+    if awk -v short="$SHORT_NAME" -v full="$FULL_NAME" '
+      /^overlays=/ {
+        count = split(substr($0, index($0, "=") + 1), names, /[[:space:]]+/)
+        for (i = 1; i <= count; i++) {
+          if (names[i] == short || names[i] == full) found = 1
+        }
+      }
+      END { exit !found }
+    ' "$ARMBIAN_ENV"; then
+      info "UART3 overlay already present in $ARMBIAN_ENV"
+    elif grep -q '^overlays=' "$ARMBIAN_ENV"; then
+      sudo sed -i "0,/^overlays=/s/^overlays=.*/& ${TARGET_OVERLAY}/" "$ARMBIAN_ENV"
+      info "Added '${TARGET_OVERLAY}' overlay to $ARMBIAN_ENV"
     else
-      echo "overlays=${UART3_OVERLAY}" | sudo tee -a "$ARMBIAN_ENV"
+      echo "overlays=${TARGET_OVERLAY}" | sudo tee -a "$ARMBIAN_ENV" > /dev/null
+      info "Added '${TARGET_OVERLAY}' overlay to $ARMBIAN_ENV"
     fi
-    info "Added '${UART3_OVERLAY}' overlay to $ARMBIAN_ENV"
   else
-    info "UART3 overlay already present in $ARMBIAN_ENV"
+    warn "Neither ${FULL_NAME}.dtbo nor ${SHORT_NAME}.dtbo found in ${DTB_DIR}; UART3 overlay was not changed"
   fi
+else
+  warn "$ARMBIAN_ENV not found; UART3 overlay was not changed"
 fi
 
 sudo systemctl stop bluetooth.service hciuart.service 2>/dev/null
