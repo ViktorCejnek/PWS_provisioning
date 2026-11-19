@@ -158,9 +158,11 @@ else
   warn "$ARMBIAN_ENV not found; UART3 overlay was not changed"
 fi
 
-sudo systemctl stop bluetooth.service hciuart.service 2>/dev/null
-sudo systemctl disable bluetooth.service hciuart.service 2>/dev/null
-sudo systemctl mask bluetooth.service hciuart.service
+for service in bluetooth.service hciuart.service; do
+  sudo systemctl stop --no-block "$service" 2>/dev/null || true
+  sudo systemctl disable "$service" 2>/dev/null || true
+  sudo systemctl mask "$service" 2>/dev/null || true
+done
 
 # 2. Release ttyS0 only if it is active
 if systemctl is-active --quiet serial-getty@ttyS0.service 2>/dev/null; then
