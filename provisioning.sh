@@ -48,10 +48,27 @@ fi
 
 # 1. System Hostname & Timezone
 echo "[1/4] Setting hostname: $PRINTER_HOSTNAME"
-hostnamectl set-hostname "$PRINTER_HOSTNAME"
-echo "$PRINTER_HOSTNAME" > /etc/hostname
-sed -i "s/127\.0\.1\.1.*/127.0.1.1\t${PRINTER_HOSTNAME}/" /etc/hosts || \
+if ! hostnamectl set-hostname "$PRINTER_HOSTNAME"; then
+  echo "Static hostname update unavailable; trying transient hostname..."
+  if ! hostnamectl --transient set-hostname "$PRINTER_HOSTNAME"; then
+    hostname "$PRINTER_HOSTNAME" 2>/dev/null || \
+      echo "WARNING: Could not update the system hostname."
+  fi
+fi
+
+# Update /etc/hostname only when it is writable. This may be read-only on
+# immutable/locked-down Armbian images, in which case the transient hostname
+# above is the only supported option.
+if [[ -w /etc/hostname ]]; then
+  printf '%s\n' "$PRINTER_HOSTNAME" > /etc/hostname
+else
+  echo "WARNING: /etc/hostname is not writable; keeping transient hostname."
+fi
+
+sed -i "s/^127\.0\.1\.1.*/127.0.1.1 ${PRINTER_HOSTNAME}/" /etc/hosts 2>/dev/null || true
+if ! grep -q '^127\.0\.1\.1[[:space:]]' /etc/hosts; then
   echo "127.0.1.1 ${PRINTER_HOSTNAME}" >> /etc/hosts
+fi
 
 # echo "[1/5] Setting timezone: $TIMEZONE"
 # timedatectl set-timezone "$TIMEZONE" 2>/dev/null || true
