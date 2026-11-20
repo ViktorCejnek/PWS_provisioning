@@ -37,6 +37,8 @@ SPECTODA_BRIDGE_DIR="${HOME_DIR}/spectoda-bridge-pws400k"
 SPECTODA_PKG_DIR="${HOME_DIR}/spectoda-pws400k"
 KLIPPER_IP_DIR="${HOME_DIR}/Klipper_IP"
 MOONRAKER_SPECTODA_DIR="${HOME_DIR}/moonraker-spectoda-connector"
+PROVISIONING_REPO="https://github.com/ViktorCejnek/PWS_provisioning.git"
+PROVISIONING_REPO_DIR="${HOME_DIR}/PWS_provisioning"
 
 # Public GitHub Repositories (PrintWithSmile)
 REPO_BASE="https://github.com/PrintWithSmile"
@@ -260,6 +262,7 @@ fi
 clone_or_update "$CONFIG_REPO"            "$CONFIG_DIR"
 clone_or_update "$KLIPPER_IP_REPO"        "$KLIPPER_IP_DIR"
 clone_or_update "$PWS_INSTALL_REPO"       "${PWS_DIR}/PWS_install"
+clone_or_update "$PROVISIONING_REPO"      "$PROVISIONING_REPO_DIR"
 
 if [[ "$ENABLE_SPECTODA" -eq 1 ]]; then
   clone_or_update "$SPECTODA_BRIDGE_REPO"   "$SPECTODA_BRIDGE_DIR" "release"
@@ -367,52 +370,33 @@ curl -fsSL "$MAINSAIL_RELEASE_URL" -o /tmp/mainsail.zip
 unzip -qo /tmp/mainsail.zip -d "$MAINSAIL_DIR"
 rm -f /tmp/mainsail.zip
 
-# Nginx site configuration
-sudo tee /etc/nginx/sites-available/mainsail > /dev/null <<EOF
-map \$http_upgrade \$connection_upgrade {
-    default upgrade;
-    ''      close;
+NGINX_SITE_SOURCE="${PROVISIONING_REPO_DIR}/mainsail"
+NGINX_COMMON_SOURCE="${PROVISIONING_REPO_DIR}/common_vars.conf"
+NGINX_UPSTREAMS_SOURCE="${PROVISIONING_REPO_DIR}/upstreams.conf"
+
+for source in "$NGINX_SITE_SOURCE" "$NGINX_COMMON_SOURCE" "$NGINX_UPSTREAMS_SOURCE"; do
+  [[ -f "$source" ]] || error "Required Nginx config file is missing: $source"
+done
+
+sudo install -o root -g root -m 0644 "$NGINX_SITE_SOURCE" /etc/nginx/sites-available/mainsail
+sudo install -o root -g root -m 0644 "$NGINX_COMMON_SOURCE" /etc/nginx/conf.d/common_vars.conf
+sudo install -o root -g root -m 0644 "$NGINX_UPSTREAMS_SOURCE" /etc/nginx/conf.d/upstreams.conf
+
+verify_nginx_config_owner() {
+  local file=$1 actual
+  actual="$(sudo stat -c '%u:%g:%a' "$file")"
+  [[ "$actual" == "0:0:644" ]] || error "$file has owner/mode $actual; expected 0:0:644"
+  info "Verified root:root 0644: $file"
 }
 
-upstream moonraker {
-    server 127.0.0.1:7125;
-}
+verify_nginx_config_owner /etc/nginx/sites-available/mainsail
+verify_nginx_config_owner /etc/nginx/conf.d/common_vars.conf
+verify_nginx_config_owner /etc/nginx/conf.d/upstreams.conf
 
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-
-    server_name _;
-    root ${MAINSAIL_DIR};
-    index index.html;
-
-    client_max_body_size 1G;
-
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-
-    location /websocket {
-        proxy_pass http://moonraker/websocket;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$connection_upgrade;
-        proxy_set_header Host \$host;
-        proxy_read_timeout 86400;
-    }
-
-    location ~ ^/(printer|api|access|machine|server)/ {
-        proxy_pass http://moonraker\$request_uri;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_read_timeout 300;
-    }
-
-    location /webcam/ {
-        proxy_pass http://127.0.0.1:8080/;
-    }
-}
-EOF
+# Nginx workers need traversal through /home/pi and read access to the static site.
+sudo chmod o+x "$HOME_DIR"
+sudo find "$MAINSAIL_DIR" -type d -exec chmod 0755 {} +
+sudo find "$MAINSAIL_DIR" -type f -exec chmod 0644 {} +
 
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo ln -sf /etc/nginx/sites-available/mainsail /etc/nginx/sites-enabled/mainsail
