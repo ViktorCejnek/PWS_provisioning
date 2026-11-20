@@ -270,21 +270,7 @@ if [[ "$ENABLE_SPECTODA" -eq 1 ]]; then
   clone_or_update "$MOONRAKER_SPECTODA_REPO" "$MOONRAKER_SPECTODA_DIR"
 fi
 
-# Setup automatic post-merge hook so 'git pull' hot-deploys updated configs
-HOOK_FILE="${CONFIG_DIR}/.git/hooks/post-merge"
-cat > "$HOOK_FILE" <<HOOK
-#!/bin/sh
-echo "[PWS] Syncing updated configurations to printer_data..."
-cp -f "${CONFIG_DIR}/printer.cfg"     "${PRINTER_DATA}/config/"
-cp -f "${CONFIG_DIR}/moonraker.conf"  "${PRINTER_DATA}/config/"
-cp -f "${CONFIG_DIR}/crowsnest.conf"  "${PRINTER_DATA}/config/"
-cp -rf "${CONFIG_DIR}/${CONFIG_SUBDIR}/." "${PRINTER_DATA}/config/PWS_config/"
-chown -R ${KLIPPER_USER}:${KLIPPER_USER} "${PRINTER_DATA}/config"
-echo "[PWS] Configuration sync complete."
-HOOK
-chmod +x "$HOOK_FILE"
-
-success "Repositories cloned and post-merge hook configured"
+success "Repositories cloned"
 
 ################################################################################
 # STEP 5 – Install Klipper
@@ -338,21 +324,17 @@ success "Klipper installed & enabled"
 ################################################################################
 step "6/11  Installing Moonraker"
 
-if [[ ! -d "${MOONRAKER_DIR}/.git" ]]; then
-  git clone https://github.com/Arksine/moonraker.git "$MOONRAKER_DIR"
-fi
+cd "${HOME_DIR}"
+wget -O install-moonraker.sh \
+  https://raw.githubusercontent.com/Arksine/moonraker/master/scripts/install-moonraker.sh
+chmod +x install-moonraker.sh
 
-if [[ -f "${MOONRAKER_DIR}/scripts/install-moonraker.sh" ]]; then
-  info "Running Moonraker official install-moonraker.sh..."
-  
   # -f : Force overwrite of systemd/polkit rules
   # -s : Install C-extension speedups 
   # -z : Disable systemctl commands (avoids starting Moonraker early)
   # -d : Set custom data path
-  bash "${MOONRAKER_DIR}/scripts/install-moonraker.sh" -f -s -z -d "${PRINTER_DATA}"
-else
-  error "Moonraker repository is corrupted or install script is missing!"
-fi
+info "Running Moonraker official install-moonraker.sh..."
+./install-moonraker.sh -f -s -z -d "${PRINTER_DATA}"
 
 success "Moonraker installed (service enable deferred to Step 12)"
 
@@ -503,11 +485,11 @@ echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║           PWS 400K Headless Installation Complete!           ║${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
-echo -e "${GREEN}║  Mainsail Web Interface : http://${IP_ADDR}                     ║${NC}"
-echo -e "${GREEN}║  Moonraker API          : http://${IP_ADDR}:7125                ║${NC}"
-echo -e "${GREEN}║  Webcam Stream          : http://${IP_ADDR}:8080                ║${NC}"
+echo -e "${GREEN}║  Mainsail Web Interface : http://${IP_ADDR}                  ║${NC}"
+echo -e "${GREEN}║  Moonraker API          : http://${IP_ADDR}:7125             ║${NC}"
+echo -e "${GREEN}║  Webcam Stream          : http://${IP_ADDR}:8080             ║${NC}"
 if [[ "$ENABLE_SPECTODA" -eq 1 ]]; then
-echo -e "${GREEN}║  Spectoda REST Bridge   : http://${IP_ADDR}:8888                ║${NC}"
+echo -e "${GREEN}║  Spectoda REST Bridge   : http://${IP_ADDR}:8888             ║${NC}"
 fi
 echo -e "${GREEN}║                                                              ║${NC}"
 echo -e "${GREEN}║  ⚠ PLEASE REBOOT THE BOARD to load UART3 device tree overlay:║${NC}"
