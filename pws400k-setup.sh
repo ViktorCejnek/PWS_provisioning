@@ -343,15 +343,6 @@ success "Moonraker installed (service enable deferred to Step 12)"
 ################################################################################
 step "7/11  Installing Mainsail web interface"
 
-mkdir -p "$MAINSAIL_DIR"
-MAINSAIL_RELEASE_URL=$(curl -fsSL "https://api.github.com/repos/mainsail-crew/mainsail/releases/latest" \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['assets'][0]['browser_download_url'])" 2>/dev/null || \
-  echo "https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip")
-
-curl -fsSL "$MAINSAIL_RELEASE_URL" -o /tmp/mainsail.zip
-unzip -qo /tmp/mainsail.zip -d "$MAINSAIL_DIR"
-rm -f /tmp/mainsail.zip
-
 NGINX_SITE_SOURCE="${PROVISIONING_REPO_DIR}/mainsail"
 NGINX_COMMON_SOURCE="${PROVISIONING_REPO_DIR}/common_vars.conf"
 NGINX_UPSTREAMS_SOURCE="${PROVISIONING_REPO_DIR}/upstreams.conf"
@@ -381,8 +372,16 @@ sudo find "$MAINSAIL_DIR" -type d -exec chmod 0755 {} +
 sudo find "$MAINSAIL_DIR" -type f -exec chmod 0644 {} +
 
 sudo rm -f /etc/nginx/sites-enabled/default
-sudo ln -sf /etc/nginx/sites-available/mainsail /etc/nginx/sites-enabled/mainsail
-sudo nginx -t
+sudo ln -sf /etc/nginx/sites-available/mainsail /etc/nginx/sites-enabled/
+sudo systemctl restart nginx
+
+mkdir -p "$MAINSAIL_DIR"
+cd "$MAINSAIL_DIR"
+wget -q -O mainsail.zip \
+  https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip
+unzip -qo mainsail.zip
+rm -f mainsail.zip
+cd "$HOME_DIR"
 
 success "Mainsail installed on port 80"
 
@@ -478,6 +477,13 @@ for svc in "${SERVICES[@]}"; do
     warn "$svc is not active yet (will start after reboot)"
   fi
 done
+
+if systemctl is-active --quiet moonraker && \
+   curl -fsS http://localhost/server/info | python3 -m json.tool >/dev/null; then
+  success "Moonraker reverse proxy is working"
+else
+  warn "Moonraker reverse proxy could not be verified yet"
+fi
 
 IP_ADDR=$(hostname -I | awk '{print $1}' || echo "100.65.3.145")
 
