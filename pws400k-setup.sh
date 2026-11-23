@@ -84,7 +84,7 @@ step() { echo -e "\n${YELLOW}════ $* ════${NC}" | tee -a "$LOG_F
 ################################################################################
 step "0/11  Updating system and installing base packages"
 info "Ensuring services are stopped before provisioning..."
-sudo systemctl stop klipper moonraker nginx crowsnest karmen-pws-connector spectoda-bridge-pws400k moonraker-spectoda-connector 2>/dev/null || true
+sudo systemctl stop klipper moonraker nginx crowsnest spectoda-bridge-pws400k moonraker-spectoda-connector 2>/dev/null || true
 
 ################################################################################
 # STEP 1 – Update OS & Install Core Dependencies
@@ -137,6 +137,15 @@ success "Base packages installed ($GPIOD_PKG)"
 step "2/11  Configuring UART3 and GPIO permissions"
 
 ARMBIAN_ENV="/boot/armbianEnv.txt"
+
+# 0. Use the display console instead of the serial console
+if [[ -f "$ARMBIAN_ENV" ]]; then
+  if grep -q '^console=' "$ARMBIAN_ENV"; then
+    sudo sed -i 's/^console=.*/console=display/' "$ARMBIAN_ENV"
+  else
+    echo "console=display" | sudo tee -a "$ARMBIAN_ENV" > /dev/null
+  fi
+fi
 
 # 1. Enable the UART3 overlay for MCU communication (/dev/ttyS3)
 if [[ -f "$ARMBIAN_ENV" ]]; then
@@ -453,58 +462,9 @@ fi
 success "Crowsnest installed"
 
 ################################################################################
-# STEP 9 – Karmen PWS Connector
+# STEP 9 – Install Klipper_IP (Network Status Plugin)
 ################################################################################
-step "9/11  Installing Karmen PWS connector"
-
-KARMEN_INSTALLER_TMP="${HOME_DIR}/.karmen-pws-connector-install.sh.part"
-  KARMEN_INSTALLER="${HOME_DIR}/karmen-pws-connector-install.sh"
-  rm -f "$KARMEN_INSTALLER_TMP" "$KARMEN_INSTALLER"
-
-  if ! curl --fail --location --silent --show-error \
-    --retry 3 --retry-connrefused --retry-delay 2 \
-    --connect-timeout 10 --max-time 60 \
-    --output "$KARMEN_INSTALLER_TMP" \
-    https://raw.githubusercontent.com/fragaria/karmen-pws-connector/main/install.sh; then
-    rm -f "$KARMEN_INSTALLER_TMP"
-    error "Failed to download the Karmen PWS connector installer after retries"
-  fi
-
-  if [[ ! -s "$KARMEN_INSTALLER_TMP" ]]; then
-    rm -f "$KARMEN_INSTALLER_TMP"
-    error "Downloaded Karmen PWS connector installer is empty"
-  fi
-
-  if ! bash -n "$KARMEN_INSTALLER_TMP"; then
-    rm -f "$KARMEN_INSTALLER_TMP"
-    error "Downloaded Karmen PWS connector installer failed shell syntax validation"
-  fi
-
-  mv -f "$KARMEN_INSTALLER_TMP" "$KARMEN_INSTALLER"
-  chmod 0755 "$KARMEN_INSTALLER"
-
-  info "Running Karmen PWS connector installer..."
-  if ! sudo bash "$KARMEN_INSTALLER"; then
-    rm -f "$KARMEN_INSTALLER"
-    error "Karmen PWS connector installer failed"
-  fi
-  rm -f "$KARMEN_INSTALLER"
-
-  if [[ ! -f /etc/systemd/system/karmen-pws-connector.service ]]; then
-    error "Karmen PWS connector service file was not created"
-  fi
-
-  sudo systemctl daemon-reload
-  if systemctl is-active --quiet karmen-pws-connector; then
-    success "Karmen PWS connector installed and active"
-  else
-    error "Karmen PWS connector service is not active"
-  fi
-
-################################################################################
-# STEP 10 – Install Klipper_IP (Network Status Plugin)
-################################################################################
-step "10/11  Installing Klipper_IP plugin"
+step "9/11  Installing Klipper_IP plugin"
 
 if [[ -f "${KLIPPER_IP_DIR}/install.sh" ]]; then
   bash "${KLIPPER_IP_DIR}/install.sh"
@@ -515,9 +475,9 @@ fi
 success "Klipper_IP plugin installed"
 
 ################################################################################
-# STEP 11 – Deploy Printer Configurations
+# STEP 10 – Deploy Printer Configurations
 ################################################################################
-step "11/11  Deploying PWS 400K configurations"
+step "10/11  Deploying PWS 400K configurations"
 
 # Backup existing configs if found
 if [[ -f "${PRINTER_DATA}/config/printer.cfg" ]]; then
@@ -551,11 +511,12 @@ chown -R "${KLIPPER_USER}:${KLIPPER_USER}" "${KLIPPER_IP_DIR}"
 success "Printer configs deployed"
 
 ################################################################################
-# STEP 12 – Enable & Start Services
+# STEP 11 – Enable & Start Services
 ################################################################################
+step "11/11  Enabling and starting services"
 sudo systemctl daemon-reload
 
-SERVICES=(klipper moonraker nginx crowsnest karmen-pws-connector)
+SERVICES=(klipper moonraker nginx crowsnest)
 if [[ "$ENABLE_SPECTODA" -eq 1 ]]; then
   SERVICES+=(bluetooth spectoda-bridge-pws400k)
 fi
