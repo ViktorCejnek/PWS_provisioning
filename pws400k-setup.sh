@@ -37,10 +37,10 @@ SPECTODA_BRIDGE_DIR="${HOME_DIR}/spectoda-bridge-pws400k"
 SPECTODA_PKG_DIR="${HOME_DIR}/spectoda-pws400k"
 KLIPPER_IP_DIR="${HOME_DIR}/Klipper_IP"
 MOONRAKER_SPECTODA_DIR="${HOME_DIR}/moonraker-spectoda-connector"
-PROVISIONING_REPO="https://github.com/ViktorCejnek/PWS_provisioning.git"
 PROVISIONING_REPO_DIR="${HOME_DIR}/PWS_provisioning"
 
 # Public GitHub Repositories (PrintWithSmile)
+PROVISIONING_REPO="https://github.com/ViktorCejnek/PWS_provisioning.git"
 REPO_BASE="https://github.com/PrintWithSmile"
 CONFIG_EN_REPO="${REPO_BASE}/PWS_400K_EN.git"
 CONFIG_CZ_REPO="${REPO_BASE}/PWS_400K_CZ.git"
@@ -84,7 +84,7 @@ step() { echo -e "\n${YELLOW}════ $* ════${NC}" | tee -a "$LOG_F
 ################################################################################
 step "0/11  Updating system and installing base packages"
 info "Ensuring services are stopped before provisioning..."
-sudo systemctl stop klipper moonraker nginx crowsnest spectoda-bridge-pws400k moonraker-spectoda-connector 2>/dev/null || true
+sudo systemctl stop klipper moonraker nginx crowsnest karmen-pws-connector spectoda-bridge-pws400k moonraker-spectoda-connector 2>/dev/null || true
 
 ################################################################################
 # STEP 1 – Update OS & Install Core Dependencies
@@ -92,7 +92,7 @@ sudo systemctl stop klipper moonraker nginx crowsnest spectoda-bridge-pws400k mo
 step "1/11  Updating system and installing base packages"
 
 sudo apt-get update -qq
-sudo apt-get upgrade -y -qq
+sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
 
 # Install libgpiod (libgpiod3 on Debian 12 / Bookworm, fallback to libgpiod2 on older)
 GPIOD_PKG="libgpiod3"
@@ -100,19 +100,33 @@ if ! apt-cache show libgpiod3 &>/dev/null; then
   GPIOD_PKG="libgpiod2"
 fi
 
-sudo apt-get install -y --no-install-recommends \
-  git curl wget python3 python3-pip python3-venv python3-dev \
-  libffi-dev libssl-dev liblzma-dev build-essential \
-  libncurses-dev libusb-1.0-0-dev pkg-config \
-  nginx libnginx-mod-stream \
-  iproute2 net-tools wireless-tools rfkill \
-  gpiod "$GPIOD_PKG" \
-  avrdude stm32flash openocd \
-  jq unzip zip ca-certificates
+# Core system packages
+PKGLIST=(git curl wget nginx libnginx-mod-stream iproute2 net-tools wireless-tools rfkill)
+PKGLIST+=(jq unzip zip ca-certificates)
+
+# Packages for Python 3 and CFFI
+PKGLIST+=(python3 python3-pip python3-venv python3-dev libffi-dev libssl-dev liblzma-dev build-essential)
+
+# Kconfig requirements
+PKGLIST+=(libncurses-dev)
+
+# hub-ctrl
+PKGLIST+=(libusb-dev libusb-1.0-0-dev)
+
+# AVR chip installation and building
+PKGLIST+=(avrdude gcc-avr binutils-avr avr-libc)
+
+# ARM chip installation and building
+PKGLIST+=(stm32flash libnewlib-arm-none-eabi gcc-arm-none-eabi binutils-arm-none-eabi pkg-config)
+
+# GPIO and hardware programming
+PKGLIST+=(gpiod "$GPIOD_PKG" openocd)
+
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${PKGLIST[@]}"
 
 # Install bluetooth packages only if spectoda is enabled
 if [[ "$ENABLE_SPECTODA" -eq 1 ]]; then
-  sudo apt-get install -y --no-install-recommends bluetooth bluez bluez-tools || true
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends bluetooth bluez bluez-tools || true
 fi
 
 success "Base packages installed ($GPIOD_PKG)"
@@ -294,27 +308,27 @@ fi
 # Service definition for Klipper
 sudo tee /etc/systemd/system/klipper.service > /dev/null <<EOF
 [Unit]
-Description=Klipper 3D Printer Firmware
+Description=Klipper 3D Printer Firmware SV1
 Documentation=https://www.klipper3d.org/
-After=network.target
-Before=moonraker.service
+After=network-online.target
+Wants=udev.target
+
+[Install]
+WantedBy=multi-user.target
 
 [Service]
 Type=simple
 User=${KLIPPER_USER}
 RemainAfterExit=yes
 WorkingDirectory=${KLIPPER_DIR}
-EnvironmentFile=/etc/default/klipper
-ExecStart=${KLIPPER_DIR}/klippy-env/bin/python ${KLIPPER_DIR}/klippy/klippy.py \${KLIPPER_ARGS}
+EnvironmentFile=${PRINTER_DATA}/systemd/klipper.env
+ExecStart=${KLIPPER_DIR}/klippy-env/bin/python \$KLIPPER_ARGS
 Restart=always
 RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
 EOF
 
-sudo tee /etc/default/klipper > /dev/null <<EOF
-KLIPPER_ARGS="${PRINTER_DATA}/config/printer.cfg -l ${PRINTER_DATA}/logs/klippy.log -a ${PRINTER_DATA}/comms/klippy.sock"
+tee "${PRINTER_DATA}/systemd/klipper.env" > /dev/null <<EOF
+KLIPPER_ARGS="${KLIPPER_DIR}/klippy/klippy.py ${PRINTER_DATA}/config/printer.cfg -l ${PRINTER_DATA}/logs/klippy.log -I ${PRINTER_DATA}/comms/klippy.serial -a ${PRINTER_DATA}/comms/klippy.sock"
 EOF
 
 success "Klipper installed & enabled"
@@ -324,17 +338,34 @@ success "Klipper installed & enabled"
 ################################################################################
 step "6/11  Installing Moonraker"
 
-cd "${HOME_DIR}"
-wget -O install-moonraker.sh \
-  https://raw.githubusercontent.com/Arksine/moonraker/master/scripts/install-moonraker.sh
-chmod +x install-moonraker.sh
+MOONRAKER_INSTALLER_TMP="${HOME_DIR}/.install-moonraker.sh.part"
+MOONRAKER_INSTALLER="${HOME_DIR}/install-moonraker.sh"
+rm -f "$MOONRAKER_INSTALLER_TMP"
+if ! wget --tries=3 --timeout=30 --waitretry=2 --retry-connrefused \
+  -O "$MOONRAKER_INSTALLER_TMP" \
+  https://raw.githubusercontent.com/Arksine/moonraker/master/scripts/install-moonraker.sh; then
+  rm -f "$MOONRAKER_INSTALLER_TMP"
+  error "Failed to download the Moonraker installer after retries"
+fi
+if [[ ! -s "$MOONRAKER_INSTALLER_TMP" ]]; then
+  rm -f "$MOONRAKER_INSTALLER_TMP"
+  error "Downloaded Moonraker installer is empty"
+fi
+if ! bash -n "$MOONRAKER_INSTALLER_TMP"; then
+  rm -f "$MOONRAKER_INSTALLER_TMP"
+  error "Downloaded Moonraker installer failed shell syntax validation"
+fi
+mv -f "$MOONRAKER_INSTALLER_TMP" "${HOME_DIR}/install-moonraker.sh"
+chmod +x "${HOME_DIR}/install-moonraker.sh"
 
   # -f : Force overwrite of systemd/polkit rules
   # -s : Install C-extension speedups 
   # -z : Disable systemctl commands (avoids starting Moonraker early)
   # -d : Set custom data path
 info "Running Moonraker official install-moonraker.sh..."
-./install-moonraker.sh -f -s -z -d "${PRINTER_DATA}"
+"${HOME_DIR}/install-moonraker.sh" -f -s -z -d "${PRINTER_DATA}"
+
+
 
 success "Moonraker installed (service enable deferred to Step 12)"
 
@@ -342,6 +373,30 @@ success "Moonraker installed (service enable deferred to Step 12)"
 # STEP 7 – Install Mainsail (Web Frontend via Nginx)
 ################################################################################
 step "7/11  Installing Mainsail web interface"
+
+mkdir -p "$MAINSAIL_DIR"
+MAINSAIL_ZIP_TMP="${MAINSAIL_DIR}/mainsail.zip.part"
+MAINSAIL_ZIP="${MAINSAIL_DIR}/mainsail.zip"
+rm -f "$MAINSAIL_ZIP_TMP"
+if ! wget --tries=3 --timeout=30 --waitretry=2 --retry-connrefused \
+  -O "$MAINSAIL_ZIP_TMP" \
+  https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip; then
+  rm -f "$MAINSAIL_ZIP_TMP"
+  error "Failed to download the Mainsail archive after retries"
+fi
+if [[ ! -s "$MAINSAIL_ZIP_TMP" ]]; then
+  rm -f "$MAINSAIL_ZIP_TMP"
+  error "Downloaded Mainsail archive is empty"
+fi
+if ! unzip -tq "$MAINSAIL_ZIP_TMP" >/dev/null; then
+  rm -f "$MAINSAIL_ZIP_TMP"
+  error "Downloaded Mainsail archive is invalid"
+fi
+mv -f "$MAINSAIL_ZIP_TMP" "$MAINSAIL_ZIP"
+if ! unzip -qo "$MAINSAIL_ZIP" -d "$MAINSAIL_DIR"; then
+  error "Failed to extract the Mainsail archive"
+fi
+rm -f "$MAINSAIL_ZIP"
 
 NGINX_SITE_SOURCE="${PROVISIONING_REPO_DIR}/mainsail"
 NGINX_COMMON_SOURCE="${PROVISIONING_REPO_DIR}/common_vars.conf"
@@ -372,16 +427,8 @@ sudo find "$MAINSAIL_DIR" -type d -exec chmod 0755 {} +
 sudo find "$MAINSAIL_DIR" -type f -exec chmod 0644 {} +
 
 sudo rm -f /etc/nginx/sites-enabled/default
-sudo ln -sf /etc/nginx/sites-available/mainsail /etc/nginx/sites-enabled/
+sudo ln -sfn /etc/nginx/sites-available/mainsail /etc/nginx/sites-enabled/
 sudo systemctl restart nginx
-
-mkdir -p "$MAINSAIL_DIR"
-cd "$MAINSAIL_DIR"
-wget -q -O mainsail.zip \
-  https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip
-unzip -qo mainsail.zip
-rm -f mainsail.zip
-cd "$HOME_DIR"
 
 success "Mainsail installed on port 80"
 
@@ -397,17 +444,62 @@ if [[ ! -d "${CROWSNEST_DIR}/.git" ]]; then
   git clone https://github.com/mainsail-crew/crowsnest.git "$CROWSNEST_DIR"
 fi
 
-cd "$CROWSNEST_DIR"
 # CROWSNEST_UNATTENDED=1 allows sudo make install to run headlessly without interactive prompts
-sudo CROWSNEST_UNATTENDED=1 CROWSNEST_ADD_CROWSNEST_MOONRAKER=1 make install || warn "Crowsnest installer finished with warnings"
-cd "$HOME_DIR"
+(
+  cd "$CROWSNEST_DIR"
+  sudo CROWSNEST_UNATTENDED=1 CROWSNEST_ADD_CROWSNEST_MOONRAKER=1 make install || warn "Crowsnest installer finished with warnings"
+)
 
 success "Crowsnest installed"
 
 ################################################################################
-# STEP 9 – Spectoda Bridge (Optional / Skipped by default)
+# STEP 9 – Karmen PWS Connector
 ################################################################################
-step "9/11  Nope"
+step "9/11  Installing Karmen PWS connector"
+
+KARMEN_INSTALLER_TMP="${HOME_DIR}/.karmen-pws-connector-install.sh.part"
+  KARMEN_INSTALLER="${HOME_DIR}/karmen-pws-connector-install.sh"
+  rm -f "$KARMEN_INSTALLER_TMP" "$KARMEN_INSTALLER"
+
+  if ! curl --fail --location --silent --show-error \
+    --retry 3 --retry-connrefused --retry-delay 2 \
+    --connect-timeout 10 --max-time 60 \
+    --output "$KARMEN_INSTALLER_TMP" \
+    https://raw.githubusercontent.com/fragaria/karmen-pws-connector/main/install.sh; then
+    rm -f "$KARMEN_INSTALLER_TMP"
+    error "Failed to download the Karmen PWS connector installer after retries"
+  fi
+
+  if [[ ! -s "$KARMEN_INSTALLER_TMP" ]]; then
+    rm -f "$KARMEN_INSTALLER_TMP"
+    error "Downloaded Karmen PWS connector installer is empty"
+  fi
+
+  if ! bash -n "$KARMEN_INSTALLER_TMP"; then
+    rm -f "$KARMEN_INSTALLER_TMP"
+    error "Downloaded Karmen PWS connector installer failed shell syntax validation"
+  fi
+
+  mv -f "$KARMEN_INSTALLER_TMP" "$KARMEN_INSTALLER"
+  chmod 0755 "$KARMEN_INSTALLER"
+
+  info "Running Karmen PWS connector installer..."
+  if ! sudo bash "$KARMEN_INSTALLER"; then
+    rm -f "$KARMEN_INSTALLER"
+    error "Karmen PWS connector installer failed"
+  fi
+  rm -f "$KARMEN_INSTALLER"
+
+  if [[ ! -f /etc/systemd/system/karmen-pws-connector.service ]]; then
+    error "Karmen PWS connector service file was not created"
+  fi
+
+  sudo systemctl daemon-reload
+  if systemctl is-active --quiet karmen-pws-connector; then
+    success "Karmen PWS connector installed and active"
+  else
+    error "Karmen PWS connector service is not active"
+  fi
 
 ################################################################################
 # STEP 10 – Install Klipper_IP (Network Status Plugin)
@@ -436,7 +528,7 @@ fi
 
 # Deploy primary configuration files
 cp -f "${CONFIG_DIR}/printer.cfg"     "${PRINTER_DATA}/config/"
-# cp -f "${CONFIG_DIR}/moonraker.conf"  "${PRINTER_DATA}/config/"
+cp -f "${PROVISIONING_REPO_DIR}/moonraker.conf" "${PRINTER_DATA}/config/moonraker.conf"
 cp -f "${CONFIG_DIR}/crowsnest.conf"  "${PRINTER_DATA}/config/"
 cp -rf "${CONFIG_DIR}/${CONFIG_SUBDIR}/." "${PRINTER_DATA}/config/PWS_config/"
 
@@ -463,7 +555,7 @@ success "Printer configs deployed"
 ################################################################################
 sudo systemctl daemon-reload
 
-SERVICES=(klipper moonraker nginx crowsnest)
+SERVICES=(klipper moonraker nginx crowsnest karmen-pws-connector)
 if [[ "$ENABLE_SPECTODA" -eq 1 ]]; then
   SERVICES+=(bluetooth spectoda-bridge-pws400k)
 fi
@@ -478,12 +570,22 @@ for svc in "${SERVICES[@]}"; do
   fi
 done
 
-if systemctl is-active --quiet moonraker && \
-   curl -fsS http://localhost/server/info | python3 -m json.tool >/dev/null; then
+MOONRAKER_VERIFY_TMP=$(mktemp)
+MOONRAKER_HTTP_STATUS=""
+if systemctl is-active --quiet moonraker; then
+  MOONRAKER_HTTP_STATUS=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+    --retry 3 --retry-connrefused --retry-delay 2 \
+    --output "$MOONRAKER_VERIFY_TMP" --write-out '%{http_code}' \
+    http://localhost/server/info 2>/dev/null || true)
+fi
+
+if [[ "$MOONRAKER_HTTP_STATUS" == "200" ]] && \
+   python3 -c 'import json, sys; data = json.load(open(sys.argv[1])); sys.exit(0 if isinstance(data, dict) and "result" in data else 1)' "$MOONRAKER_VERIFY_TMP"; then
   success "Moonraker reverse proxy is working"
 else
   warn "Moonraker reverse proxy could not be verified yet"
 fi
+rm -f "$MOONRAKER_VERIFY_TMP"
 
 IP_ADDR=$(hostname -I | awk '{print $1}' || echo "100.65.3.145")
 
