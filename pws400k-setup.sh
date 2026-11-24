@@ -84,7 +84,7 @@ step() { echo -e "\n${YELLOW}════ $* ════${NC}" | tee -a "$LOG_F
 ################################################################################
 step "0/11  Updating system and installing base packages"
 info "Ensuring services are stopped before provisioning..."
-sudo systemctl stop klipper moonraker nginx crowsnest spectoda-bridge-pws400k moonraker-spectoda-connector 2>/dev/null || true
+sudo systemctl stop --no-block klipper moonraker nginx crowsnest spectoda-bridge-pws400k moonraker-spectoda-connector 2>/dev/null || true
 
 ################################################################################
 # STEP 1 – Update OS & Install Core Dependencies
@@ -189,13 +189,11 @@ for service in bluetooth.service hciuart.service; do
   sudo systemctl mask "$service" 2>/dev/null || true
 done
 
-# 2. Release ttyS0 only if it is active
-if systemctl is-active --quiet serial-getty@ttyS0.service 2>/dev/null; then
-  info "Disabling serial-getty on ttyS0 to free port for Spectoda Controller..."
-  sudo systemctl stop serial-getty@ttyS0.service 2>/dev/null || true
-  sudo systemctl disable serial-getty@ttyS0.service 2>/dev/null || true
-  sudo systemctl mask serial-getty@ttyS0.service 2>/dev/null || true
-fi
+# 2. Stop and disable the serial getty on ttyS0 regardless of Spectoda settings
+info "Stopping and disabling serial-getty on ttyS0..."
+sudo systemctl stop --no-block serial-getty@ttyS0.service || warn "Could not stop serial-getty@ttyS0.service"
+sudo systemctl disable serial-getty@ttyS0.service || warn "Could not disable serial-getty@ttyS0.service"
+sudo systemctl mask serial-getty@ttyS0.service || warn "Could not mask serial-getty@ttyS0.service"
 
 # 3. Add pi user to dialout, gpio, and tty groups
 sudo usermod -aG dialout,tty "$KLIPPER_USER"
